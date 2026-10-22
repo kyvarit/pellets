@@ -1,0 +1,16 @@
+{
+  "name": "Stock de pellets",
+  "short_name": "Pellets",
+  "description": "Suivi du stock de sacs de pellets, de la consommation et des dépenses.",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f3ef",
+  "theme_color": "#d9480f",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

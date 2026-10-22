@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pellets</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Pellets">
+<meta name="theme-color" content="#f6f3ef" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#14110f" media="(prefers-color-scheme: dark)">
+<style>
+:root{
+  color-scheme: light dark;
+  --bg:#f6f3ef; --card:#ffffff; --text:#1c1917; --muted:#78716c; --line:#e7e2dc;
+  --accent:#d9480f; --accent-ink:#ffffff; --ok:#2f7d4f; --warn:#b45309; --bad:#b91c1c;
+  --bar:#e8590c; --bar-dim:#f1d9cc;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#14110f; --card:#1f1b18; --text:#f5f1ec; --muted:#a39a92; --line:#332d28;
+    --accent:#f06a2b; --accent-ink:#1a0e07; --ok:#5fc88a; --warn:#f0a43c; --bad:#f07070;
+    --bar:#f06a2b; --bar-dim:#3a2a20;
+  }
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+body{min-height:100dvh;padding:calc(env(safe-area-inset-top) + 12px) 16px calc(env(safe-area-inset-bottom) + 84px)}
+main{max-width:520px;margin:0 auto}
+h1{font-size:15px;font-weight:600;color:var(--muted);margin:0 0 8px;letter-spacing:.04em;text-transform:uppercase}
+h2{font-size:18px;margin:0 0 12px}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+
+.hero{text-align:center;padding:18px 0 8px}
+.count{font-size:96px;line-height:1;font-weight:700;font-variant-numeric:tabular-nums}
+.count.low{color:var(--warn)} .count.zero{color:var(--bad)}
+.unit{font-size:18px;margin-top:4px}
+.sub{color:var(--muted);margin-top:6px;min-height:1.4em}
+.uses{display:grid;gap:10px;margin:22px 0 10px}
+.big small{display:block;margin-top:2px;font-size:14px;font-weight:500;opacity:.85}
+.big.off{background:var(--line);color:var(--muted);box-shadow:none}
+.big{display:block;width:100%;margin:0;padding:22px 16px;border:0;border-radius:20px;background:var(--accent);color:var(--accent-ink);font-size:21px;font-weight:700;box-shadow:0 6px 18px rgba(217,72,15,.28)}
+.big:active{transform:scale(.98)}
+.ghost{display:block;width:100%;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--card);font-weight:600}
+.last{text-align:center;color:var(--muted);font-size:14px;margin:14px 0 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 16px;margin:12px 0}
+.card p{margin:0 0 10px;color:var(--muted)}
+
+.list{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.item{display:flex;align-items:center;gap:12px;width:100%;padding:12px 16px;border:0;border-bottom:1px solid var(--line);background:none;text-align:left}
+.item:last-child{border-bottom:0}
+.dot{flex:none;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:15px;background:var(--bar-dim);color:var(--accent)}
+.dot.buy{background:rgba(47,125,79,.15);color:var(--ok)}
+.dot.adjust{background:var(--line);color:var(--muted)}
+.item .t{flex:1;min-width:0}
+.item .t b{display:block;font-weight:600}
+.item .t small{color:var(--muted)}
+.item .r{font-variant-numeric:tabular-nums;text-align:right;font-weight:600}
+.empty{padding:28px 16px;text-align:center;color:var(--muted)}
+
+.chips{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;margin:0 -16px;padding-inline:16px;scrollbar-width:none}
+.chip{flex:none;padding:7px 14px;border:1px solid var(--line);border-radius:999px;background:var(--card);font-weight:600;font-size:14px}
+.chip.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:6px 0 12px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px}
+.stat small{color:var(--muted);display:block;font-size:13px}
+.stat b{font-size:24px;font-variant-numeric:tabular-nums}
+.chart{display:flex;align-items:flex-end;gap:4px;height:130px;padding-top:18px}
+.bar{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;min-width:0}
+.bar i{display:block;width:100%;background:var(--bar);border-radius:4px 4px 0 0;min-height:2px}
+.bar i.z{background:var(--bar-dim)}
+.bar span{font-size:10px;color:var(--muted);height:14px;margin-top:3px;white-space:nowrap}
+.bar em{font-style:normal;font-size:11px;font-weight:600;height:14px}
+table{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}
+th,td{padding:8px 4px;text-align:right;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--muted);font-weight:600;font-size:12px}
+tr:last-child td{border-bottom:0}
+
+.row-set{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
+.row-set:last-child{border-bottom:0}
+.row-set input[type=number]{width:84px;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--bg);text-align:right}
+.row-set input[type=checkbox]{width:22px;height:22px;accent-color:var(--accent)}
+.note{color:var(--muted);font-size:13px;margin:6px 0 0}
+.btn{padding:12px 16px;border:1px solid var(--line);border-radius:12px;background:var(--bg);font-weight:600}
+.btn.danger{color:var(--bad)}
+
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:space-around;padding:6px 8px calc(env(safe-area-inset-bottom) + 6px);background:color-mix(in srgb,var(--card) 92%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-top:1px solid var(--line)}
+nav button{flex:1;max-width:120px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 0;border:0;background:none;color:var(--muted);font-size:11px;font-weight:600}
+nav button.on{color:var(--accent)}
+nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+dialog{width:min(92vw,420px);padding:20px;border:0;border-radius:20px;background:var(--card);color:var(--text);box-shadow:0 20px 60px rgba(0,0,0,.35)}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+dialog label{display:block;margin:0 0 12px;font-size:14px;color:var(--muted)}
+dialog input{display:block;width:100%;margin-top:4px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--text);font-size:17px}
+.seg{display:flex;gap:4px;padding:3px;margin-bottom:14px;background:var(--bg);border-radius:12px}
+.seg button{flex:1;padding:9px;border:0;border-radius:9px;background:none;font-weight:600;color:var(--muted)}
+.seg button.on{background:var(--card);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.15)}
+.total{margin:-4px 0 12px;color:var(--muted);font-size:14px}
+.btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.btns button{flex:1;min-width:0;padding:13px;border-radius:12px;border:1px solid var(--line);background:var(--bg);font-weight:600}
+.btns .primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btns .danger{flex:1 1 100%;order:3;color:var(--bad)}
+
+#toast{position:fixed;left:16px;right:16px;bottom:calc(env(safe-area-inset-bottom) + 76px);max-width:488px;margin:0 auto;display:none;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-radius:14px;background:#292524;color:#fff;font-size:15px;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+#toast.show{display:flex}
+#toast button{border:0;background:none;color:#fdba74;font-weight:700;font-size:15px}
+</style>
+</head>
+<body>
+<main id="app"></main>
+<nav id="tabs"></nav>
+<dialog id="dlg"></dialog>
+<div id="toast"></div>
+<input type="file" id="file" accept="application/json,.json" hidden>
+
+<script>
+'use strict';
+const KEY = 'pellets.v1';
+const DEFAULTS = { kg: 15, low: 3, season: false, lastBackup: null };
+const $ = s => document.querySelector(s);
+const eur = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' });
+const nf = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 1 });
+const dFmt = new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+const tFmt = new Intl.DateTimeFormat('fr-FR', { hour: '2-digit', minute: '2-digit' });
+const MONTHS = ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Août','Sep','Oct','Nov','Déc'];
+const DAY = 86400000;
+
+/* ---------- données ---------- */
+let S = load();
+let ui = { tab: 'stock', period: null };
+
+function load() {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (raw) return normalize(JSON.parse(raw));
+  } catch (e) {}
+  return { settings: { ...DEFAULTS }, events: [] };
+}
+// Remet d'aplomb des données enregistrées avant le suivi par poids de sac (kg + prix total).
+function normalize(d) {
+  const settings = { ...DEFAULTS, ...d.settings };
+  const events = (Array.isArray(d.events) ? d.events : []).map(e => {
+    const x = { ...e };
+    if (!x.kg) x.kg = settings.kg;
+    if (x.type === 'buy' && x.total == null) x.total = (x.price || 0) * x.qty;
+    delete x.price;
+    return x;
+  });
+  return { settings, events };
+}
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify({ v: 1, ...S })); }
+  catch (e) { toast('Sauvegarde impossible sur cet appareil'); }
+}
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const sorted = () => [...S.events].sort((a, b) => b.ts - a.ts);
+const delta = e => e.type === 'use' ? -e.qty : e.qty;
+const stock = () => S.events.reduce((n, e) => n + delta(e), 0);
+const ymd = ts => { const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const plural = (n, w) => `${nf.format(n)} ${w}${Math.abs(n) >= 2 ? 's' : ''}`;
+const lastKg = () => (sorted().find(e => e.type === 'buy') || {}).kg || S.settings.kg;
+function stockByKg() {
+  const m = new Map();
+  S.events.forEach(e => m.set(e.kg, (m.get(e.kg) || 0) + delta(e)));
+  return m;
+}
+const stockOf = kg => stockByKg().get(kg) || 0;
+
+function addEvent(type, qty, kg, total, ts) {
+  const e = { id: uid(), type, qty, kg, ts: ts || Date.now() };
+  if (type === 'buy') e.total = total;
+  S.events.push(e);
+  save();
+  return e;
+}
+
+/* ---------- périodes (année civile ou saison sept→août) ---------- */
+function periodOf(ts) {
+  const d = new Date(ts), y = d.getFullYear(), m = d.getMonth();
+  if (!S.settings.season) return { key: String(y), label: String(y) };
+  const s = m >= 8 ? y : y - 1;
+  return { key: String(s), label: `${s}–${String(s + 1).slice(2)}` };
+}
+const monthOrder = () => S.settings.season ? [8, 9, 10, 11, 0, 1, 2, 3, 4, 5, 6, 7] : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+function periods() {
+  const map = new Map();
+  const cur = periodOf(Date.now());
+  map.set(cur.key, cur.label);
+  S.events.forEach(e => { const p = periodOf(e.ts); map.set(p.key, p.label); });
+  return [...map].sort((a, b) => b[0] - a[0]).map(([key, label]) => ({ key, label }));
+}
+function aggregate(list) {
+  const a = { used: 0, bought: 0, spent: 0, kgUsed: 0, kgBought: 0 };
+  list.forEach(e => {
+    if (e.type === 'use') { a.used += e.qty; a.kgUsed += e.qty * e.kg; }
+    if (e.type === 'buy') { a.bought += e.qty; a.kgBought += e.qty * e.kg; a.spent += e.total || 0; }
+  });
+  a.avg = a.bought ? a.spent / a.bought : 0;
+  a.perKg = a.kgBought ? a.spent / a.kgBought : 0;
+  return a;
+}
+
+/* ---------- vues ---------- */
+const ICONS = {
+  stock: '<path d="M21 8l-9-5-9 5v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
+  history: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  stats: '<path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>'
+};
+const TABS = [['stock', 'Stock'], ['history', 'Historique'], ['stats', 'Stats'], ['settings', 'Réglages']];
+
+function render() {
+  $('#tabs').innerHTML = TABS.map(([k, l]) =>
+    `<button data-tab="${k}" class="${ui.tab === k ? 'on' : ''}"><svg viewBox="0 0 24 24">${ICONS[k]}</svg>${l}</button>`).join('');
+  $('#app').innerHTML = { stock: viewStock, history: viewHistory, stats: viewStats, settings: viewSettings }[ui.tab]();
+}
+
+function viewStock() {
+  const n = stock(), low = S.settings.low;
+  const byKg = [...stockByKg()].sort((a, b) => b[0] - a[0]);
+  const totalKg = byKg.reduce((s, [kg, q]) => s + kg * q, 0);
+  const avail = byKg.filter(([, q]) => q > 0);
+  const useButtons = !avail.length ? '<button class="big off" data-act="use">Stock vide</button>'
+    : avail.length === 1 ? `<button class="big" data-use="${avail[0][0]}">Un sac de ${nf.format(avail[0][0])} kg dans le poêle</button>`
+    : avail.map(([kg, q]) => `<button class="big" data-use="${kg}">Un sac de ${nf.format(kg)} kg<small>${q} en stock</small></button>`).join('');
+  const cls = n <= 0 ? 'zero' : n <= low ? 'low' : '';
+  const uses = S.events.filter(e => e.type === 'use');
+  const recent = uses.filter(e => e.ts > Date.now() - 14 * DAY).reduce((s, e) => s + e.qty, 0);
+  const autonomy = n > 0 && recent >= 2 ? `≈ ${Math.round(n / (recent / 14))} jours au rythme actuel` : '';
+  const start = new Date(); start.setHours(0, 0, 0, 0);
+  const today = uses.filter(e => e.ts >= start.getTime()).reduce((s, e) => s + e.qty, 0);
+  const lastUse = uses.length ? Math.max(...uses.map(e => e.ts)) : null;
+  const sub = [`${nf.format(totalKg)} kg`, autonomy].filter(Boolean).join(' · ');
+  const intro = S.events.length ? '' : `
+    <div class="card"><p>Bienvenue. Commence par indiquer le nombre de sacs que tu as en stock.</p>
+    <button class="ghost" data-act="init">Renseigner mon stock actuel</button></div>`;
+  return `
+    <h1>Poêle à pellets</h1>
+    <section class="hero">
+      <div class="count ${cls}">${n}</div>
+      <div class="unit">sac${Math.abs(n) >= 2 ? 's' : ''} en stock</div>
+      <div class="sub">${sub}</div>
+    </section>
+    ${intro}
+    <div class="uses">${useButtons}</div>
+    <button class="ghost" data-act="add">+ Ajouter des sacs (achat)</button>
+    <p class="last">${today ? `Aujourd'hui : ${plural(today, 'sac')}` : 'Aucun sac mis aujourd\'hui'}${lastUse ? ` · dernier à ${tFmt.format(lastUse)}, ${relDay(lastUse)}` : ''}</p>`;
+}
+function relDay(ts) {
+  const a = new Date(); a.setHours(0, 0, 0, 0);
+  const b = new Date(ts); b.setHours(0, 0, 0, 0);
+  const d = Math.round((a - b) / DAY);
+  return d === 0 ? "aujourd'hui" : d === 1 ? 'hier' : `il y a ${d} jours`;
+}
+
+function viewHistory() {
+  const list = sorted();
+  if (!list.length) return `<h1>Historique</h1><div class="list"><div class="empty">Rien pour l'instant.</div></div>`;
+  const rows = list.map(e => {
+    const d = new Date(e.ts);
+    const label = `${e.type === 'use' ? 'Mis dans le poêle' : e.type === 'buy' ? 'Achat' : 'Correction de stock'} · ${nf.format(e.kg)} kg`;
+    const detail = e.type === 'buy' ? `${eur.format(e.total)} · ${eur.format(e.total / e.qty)} / sac` : '';
+    const sign = delta(e) > 0 ? '+' : delta(e) < 0 ? '−' : '';
+    return `<button class="item" data-edit="${e.id}">
+      <span class="dot ${e.type}">${e.type === 'use' ? '−' : e.type === 'buy' ? '+' : '±'}</span>
+      <span class="t"><b>${label}</b><small>${dFmt.format(d)} · ${tFmt.format(d)}${detail ? ' · ' + detail : ''}</small></span>
+      <span class="r">${sign}${Math.abs(e.qty)}</span></button>`;
+  }).join('');
+  return `<h1>Historique</h1><div class="list">${rows}</div><p class="note">Touche une ligne pour la modifier ou la supprimer.</p>`;
+}
+
+function viewStats() {
+  if (!S.events.length) return `<h1>Statistiques</h1><div class="list"><div class="empty">Les stats apparaîtront dès les premiers sacs.</div></div>`;
+  const pers = periods();
+  if (!ui.period || (ui.period !== 'all' && !pers.some(p => p.key === ui.period))) ui.period = pers[0].key;
+  const all = ui.period === 'all';
+  const list = all ? S.events : S.events.filter(e => periodOf(e.ts).key === ui.period);
+  const a = aggregate(list);
+
+  let bars;
+  if (all) {
+    const rows = [...pers].reverse().map(p => ({ l: p.label.length > 5 ? p.label.slice(2) : p.label, v: aggregate(S.events.filter(e => periodOf(e.ts).key === p.key)).used }));
+    bars = chart(rows);
+  } else {
+    const order = monthOrder();
+    const v = order.map(() => 0);
+    list.filter(e => e.type === 'use').forEach(e => { v[order.indexOf(new Date(e.ts).getMonth())] += e.qty; });
+    bars = chart(order.map((m, i) => ({ l: MONTHS[m][0], v: v[i] })));
+  }
+
+  const table = pers.map(p => {
+    const x = aggregate(S.events.filter(e => periodOf(e.ts).key === p.key));
+    return `<tr><td>${p.label}</td><td>${x.used}</td><td>${eur.format(x.spent)}</td><td>${x.bought ? eur.format(x.avg) : '–'}</td><td>${x.kgBought ? eur.format(x.perKg) : '–'}</td></tr>`;
+  }).join('');
+  const total = aggregate(S.events);
+
+  return `
+    <h1>Statistiques</h1>
+    <div class="chips">
+      ${pers.map(p => `<button class="chip ${ui.period === p.key ? 'on' : ''}" data-period="${p.key}">${p.label}</button>`).join('')}
+      <button class="chip ${all ? 'on' : ''}" data-period="all">Tout</button>
+    </div>
+    <div class="grid">
+      <div class="stat"><small>Sacs consommés</small><b>${a.used}</b></div>
+      <div class="stat"><small>Poids brûlé</small><b>${nf.format(a.kgUsed)} kg</b></div>
+      <div class="stat"><small>Dépensé</small><b>${eur.format(a.spent)}</b></div>
+      <div class="stat"><small>Sacs achetés</small><b>${a.bought}</b></div>
+      <div class="stat"><small>Prix moyen du sac</small><b>${a.bought ? eur.format(a.avg) : '–'}</b></div>
+      <div class="stat"><small>Prix au kg</small><b>${a.kgBought ? eur.format(a.perKg) : '–'}</b></div>
+    </div>
+    <div class="card"><small style="color:var(--muted)">Sacs consommés ${all ? 'par ' + (S.settings.season ? 'saison' : 'année') : 'par mois'}</small>${bars}</div>
+    <div class="card"><small style="color:var(--muted)">Par ${S.settings.season ? 'saison (sept → août)' : 'année'}</small>
+      <table><tr><th></th><th>Brûlés</th><th>Dépensé</th><th>€/sac</th><th>€/kg</th></tr>${table}
+      <tr><td><b>Total</b></td><td><b>${total.used}</b></td><td><b>${eur.format(total.spent)}</b></td><td><b>${total.bought ? eur.format(total.avg) : '–'}</b></td><td><b>${total.kgBought ? eur.format(total.perKg) : '–'}</b></td></tr></table>
+    </div>`;
+}
+function chart(rows) {
+  const max = Math.max(1, ...rows.map(r => r.v));
+  return `<div class="chart">${rows.map(r => `<div class="bar"><em>${r.v || ''}</em><i class="${r.v ? '' : 'z'}" style="height:${r.v ? Math.max(4, r.v / max * 78) : 2}px"></i><span>${r.l}</span></div>`).join('')}</div>`;
+}
+
+function viewSettings() {
+  const s = S.settings;
+  const bk = s.lastBackup ? `Dernière sauvegarde : ${dFmt.format(s.lastBackup)}` : 'Aucune sauvegarde faite pour l\'instant';
+  return `
+    <h1>Réglages</h1>
+    <div class="card">
+      <div class="row-set"><span>Alerte stock bas (sacs)</span><input type="number" inputmode="numeric" min="0" step="1" value="${s.low}" data-set="low"></div>
+      <div class="row-set"><span>Stats par saison (sept → août)</span><input type="checkbox" ${s.season ? 'checked' : ''} data-set="season"></div>
+    </div>
+    <div class="card">
+      <p>Les données restent sur ton téléphone. Fais une sauvegarde de temps en temps (par exemple après chaque achat) et enregistre-la dans Fichiers ou iCloud.</p>
+      <div class="row-set" style="border:0;padding-top:0"><button class="btn" data-act="export">Sauvegarder</button><button class="btn" data-act="import">Restaurer</button></div>
+      <p class="note">${bk}</p>
+    </div>
+    <div class="card"><button class="btn danger" data-act="reset" style="width:100%">Tout effacer</button></div>`;
+}
+
+/* ---------- formulaire ajout / modification ---------- */
+const dlg = $('#dlg');
+function openForm(ev, type) {
+  const editing = !!ev;
+  type = ev ? ev.type : (type || 'buy');
+  const date = ymd(ev ? ev.ts : Date.now());
+  const kg = ev ? ev.kg : lastKg();
+  const qtyVal = ev ? ev.qty : type === 'adjust' ? stockOf(kg) : type === 'buy' ? '' : 1;
+  const qtyLabel = type === 'adjust' ? (editing ? 'Écart (+ ou −)' : 'Stock réel de ces sacs') : 'Nombre de sacs';
+  const qtyField = `<label>${qtyLabel}<input name="qty" type="number" step="1" ${type === 'adjust' ? '' : 'inputmode="numeric" min="1"'} required value="${qtyVal}"${type === 'buy' ? ' placeholder="ex. 66"' : ''}></label>`;
+  const kgField = `<label>Poids d'un sac (kg)<input name="kg" type="number" inputmode="decimal" step="0.5" min="0.5" required value="${kg}"></label>`;
+  dlg.innerHTML = `<form id="f">
+    <h2>${editing ? 'Modifier' : 'Ajouter'}</h2>
+    ${editing ? '' : `<div class="seg"><button type="button" data-t="buy" class="${type === 'buy' ? 'on' : ''}">Achat</button><button type="button" data-t="adjust" class="${type === 'adjust' ? 'on' : ''}">Correction</button></div>`}
+    ${type === 'adjust' ? kgField + qtyField : qtyField + kgField}
+    ${type === 'buy' ? `<label>Prix total payé (€)<input name="total" type="number" inputmode="decimal" step="0.01" min="0" required value="${ev ? ev.total : ''}" placeholder="ex. 429"></label><div class="total" id="tot"></div>` : ''}
+    <label>Date<input name="date" type="date" required value="${date}"></label>
+    <div class="btns">${editing ? '<button type="button" class="danger" data-del>Supprimer</button>' : ''}<button type="button" data-close>Annuler</button><button class="primary">Enregistrer</button></div>
+  </form>`;
+  const f = $('#f');
+  const upd = () => {
+    const t = $('#tot'); if (!t) return;
+    const q = +f.qty.value, k = +f.kg.value, p = +f.total.value;
+    t.textContent = q > 0 && k > 0 && f.total.value !== '' ? `${eur.format(p / q)} / sac · ${eur.format(p / (q * k))} / kg` : '';
+  };
+  f.addEventListener('input', upd); upd();
+  // Correction : tant que le stock saisi n'a pas été touché, il suit le poids choisi.
+  let touched = false;
+  f.qty.addEventListener('input', () => { touched = true; });
+  f.kg.addEventListener('input', () => { if (type === 'adjust' && !editing && !touched) f.qty.value = stockOf(+f.kg.value); });
+  f.addEventListener('click', e => {
+    const t = e.target.closest('button'); if (!t) return;
+    if (t.dataset.t) openForm(null, t.dataset.t);
+    if (t.hasAttribute('data-close')) dlg.close();
+    if (t.hasAttribute('data-del') && confirm('Supprimer cette ligne ?')) {
+      S.events = S.events.filter(x => x.id !== ev.id); save(); dlg.close(); render();
+    }
+  });
+  f.addEventListener('submit', e => {
+    e.preventDefault();
+    let qty = Math.round(+f.qty.value);
+    const day = f.date.value;
+    let ts = ev && ymd(ev.ts) === day ? ev.ts : (day === ymd(Date.now()) ? Date.now() : new Date(day + 'T12:00:00').getTime());
+    const kg = +f.kg.value;
+    if (!(kg > 0)) return;
+    if (type === 'adjust' && !editing) qty = qty - stockOf(kg);
+    if (!qty) { dlg.close(); return; }
+    if (type === 'buy' && !(qty > 0)) return;
+    const total = type === 'buy' ? +f.total.value : undefined;
+    if (editing) { ev.qty = qty; ev.kg = kg; ev.ts = ts; if (type === 'buy') ev.total = total; save(); }
+    else addEvent(type, qty, kg, total, ts);
+    dlg.close(); render();
+  });
+  if (!dlg.open) dlg.showModal();
+}
+
+/* ---------- actions ---------- */
+function useBag(kg) {
+  if (typeof kg !== 'number' || stockOf(kg) <= 0) { toast('Stock vide : ajoute un achat ou une correction'); return; }
+  const e = addEvent('use', 1, kg);
+  render();
+  toast(`Un sac de ${nf.format(kg)} kg retiré du stock`,() => { S.events = S.events.filter(x => x.id !== e.id); save(); render(); });
+  if (navigator.vibrate) navigator.vibrate(15);
+}
+
+let toastTimer;
+function toast(msg, undo) {
+  const t = $('#toast');
+  t.innerHTML = `<span>${msg}</span>${undo ? '<button>Annuler</button>' : ''}`;
+  t.classList.add('show');
+  if (undo) t.querySelector('button').onclick = () => { undo(); t.classList.remove('show'); };
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), undo ? 5000 : 3000);
+}
+
+async function exportData() {
+  const json = JSON.stringify({ v: 1, ...S }, null, 2);
+  const name = `pellets-${ymd(Date.now())}.json`;
+  const file = new File([json], name, { type: 'application/json' });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: name });
+    else { const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
+  } catch (e) { if (e.name === 'AbortError') return; toast('Export impossible'); return; }
+  S.settings.lastBackup = Date.now(); save(); render();
+}
+$('#file').addEventListener('change', async ev => {
+  const f = ev.target.files[0]; ev.target.value = '';
+  if (!f) return;
+  try {
+    const d = JSON.parse(await f.text());
+    if (!Array.isArray(d.events)) throw 0;
+    if (!confirm(`Remplacer les données actuelles par cette sauvegarde (${d.events.length} lignes) ?`)) return;
+    S = normalize(d);
+    save(); render(); toast('Sauvegarde restaurée');
+  } catch (e) { toast('Fichier non valide'); }
+});
+
+document.addEventListener('click', e => {
+  const tab = e.target.closest('[data-tab]');
+  if (tab) { ui.tab = tab.dataset.tab; render(); window.scrollTo(0, 0); return; }
+  const per = e.target.closest('[data-period]');
+  if (per) { ui.period = per.dataset.period; render(); return; }
+  const ed = e.target.closest('[data-edit]');
+  if (ed) { openForm(S.events.find(x => x.id === ed.dataset.edit)); return; }
+  const use = e.target.closest('[data-use]');
+  if (use) { useBag(+use.dataset.use); return; }
+  const act = e.target.closest('[data-act]');
+  if (!act) return;
+  ({
+    use: useBag,
+    add: () => openForm(null, 'buy'),
+    init: () => openForm(null, 'adjust'),
+    export: exportData,
+    import: () => $('#file').click(),
+    reset: () => { if (confirm('Effacer tout l\'historique ? Cette action est définitive.')) { S = { settings: { ...DEFAULTS }, events: [] }; save(); render(); } }
+  })[act.dataset.act]();
+});
+document.addEventListener('change', e => {
+  const k = e.target.dataset.set; if (!k) return;
+  S.settings[k] = k === 'season' ? e.target.checked : Math.max(0, +e.target.value || DEFAULTS[k]);
+  save(); render();
+});
+dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
+
+/* ---------- démarrage ---------- */
+render();
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
