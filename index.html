@@ -86,6 +86,28 @@ tr:last-child td{border-bottom:0}
 .row-set input[type=number]{width:84px;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--bg);text-align:right}
 .row-set input[type=checkbox]{width:22px;height:22px;accent-color:var(--accent)}
 .note{color:var(--muted);font-size:13px;margin:6px 0 0}
+.mut{color:var(--muted)}
+.bad{color:var(--bad)}
+.last + .grid{margin-top:16px}
+.task{display:flex;align-items:center;gap:10px;padding:10px 12px 10px 16px;border-bottom:1px solid var(--line)}
+.tinfo{flex:1;min-width:0;padding:2px 0;border:0;background:none;text-align:left}
+.tinfo b{display:block;font-weight:600}
+.tinfo small{color:var(--muted)}
+.task.due small{color:var(--bad);font-weight:600}
+.prog{height:6px;margin-top:6px;border-radius:3px;background:var(--line);overflow:hidden}
+.prog i{display:block;height:100%;border-radius:3px;background:var(--ok)}
+.task.soon .prog i,.prog i.warn{background:var(--warn)}
+.task.due .prog i,.prog i.over{background:var(--bad)}
+.prog.thick{height:10px;margin:10px 0 8px;border-radius:5px}
+.done{flex:none;padding:9px 14px;border:1px solid var(--line);border-radius:10px;background:var(--bg);font-weight:600}
+.item.add{color:var(--accent)}
+.brow{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px 12px}
+.cardhead{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.cardhead small{color:var(--muted)}
+.mini{display:flex;gap:2px;padding:2px;border-radius:9px;background:var(--bg)}
+.mini button{padding:4px 10px;border:0;border-radius:7px;background:none;color:var(--muted);font-size:13px;font-weight:600}
+.mini button.on{background:var(--card);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.15)}
+.chart.dense{gap:1px}
 .btn{padding:12px 16px;border:1px solid var(--line);border-radius:12px;background:var(--bg);font-weight:600}
 .btn.danger{color:var(--bad)}
 
@@ -122,7 +144,7 @@ dialog input{display:block;width:100%;margin-top:4px;padding:12px;border:1px sol
 <script>
 'use strict';
 const KEY = 'pellets.v1';
-const DEFAULTS = { kg: 15, low: 3, season: false, lastBackup: null };
+const DEFAULTS = { kg: 15, low: 3, season: false, lastBackup: null, lead: 10, budget: 0 };
 const $ = s => document.querySelector(s);
 const eur = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' });
 const nf = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 1 });
@@ -133,14 +155,14 @@ const DAY = 86400000;
 
 /* ---------- données ---------- */
 let S = load();
-let ui = { tab: 'stock', period: null };
+let ui = { tab: 'stock', period: null, grain: 'month' };
 
 function load() {
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) return normalize(JSON.parse(raw));
   } catch (e) {}
-  return { settings: { ...DEFAULTS }, events: [] };
+  return normalize({});
 }
 // Remet d'aplomb des données enregistrées avant le suivi par poids de sac (kg + prix total).
 function normalize(d) {
@@ -152,13 +174,19 @@ function normalize(d) {
     delete x.price;
     return x;
   });
-  return { settings, events };
+  const tasks = Array.isArray(d.tasks) ? d.tasks : defaultTasks();
+  return { settings, events, tasks };
 }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify({ v: 1, ...S })); }
   catch (e) { toast('Sauvegarde impossible sur cet appareil'); }
 }
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const dShort = ts => {
+  const d = new Date(ts);
+  return new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short', ...(d.getFullYear() !== new Date().getFullYear() ? { year: '2-digit' } : {}) }).format(d);
+};
 const sorted = () => [...S.events].sort((a, b) => b.ts - a.ts);
 const delta = e => e.type === 'use' ? -e.qty : e.qty;
 const stock = () => S.events.reduce((n, e) => n + delta(e), 0);
@@ -171,6 +199,48 @@ function stockByKg() {
   return m;
 }
 const stockOf = kg => stockByKg().get(kg) || 0;
+
+/* ---------- entretien ---------- */
+function defaultTasks() {
+  const last = Date.now();
+  return [
+    { id: uid(), name: 'Vider le cendrier', bags: 5, months: 0, last },
+    { id: uid(), name: 'Nettoyage complet du poêle', bags: 40, months: 6, last },
+    { id: uid(), name: 'Ramonage', bags: 0, months: 12, last }
+  ];
+}
+// Avancement d'une tâche : sacs brûlés et mois écoulés depuis la dernière fois.
+function taskState(t) {
+  const used = S.events.reduce((s, e) => e.type === 'use' && e.ts > t.last ? s + e.qty : s, 0);
+  const months = (Date.now() - t.last) / (30.44 * DAY);
+  const r = Math.max(t.bags ? used / t.bags : 0, t.months ? months / t.months : 0);
+  return { used, months, r, state: r >= 1 ? 'due' : r >= 0.8 ? 'soon' : 'ok' };
+}
+
+/* ---------- prévision de rupture ---------- */
+// Avec un an d'historique : on rejoue la conso de l'an dernier jour par jour, ajustée
+// au rythme actuel. Sinon : rythme des 14 derniers jours, à plat.
+function forecast() {
+  const n = stock();
+  const uses = S.events.filter(e => e.type === 'use');
+  if (n <= 0 || !uses.length) return null;
+  const now = Date.now(), LY = 365 * DAY;
+  const cnt = (a, b) => uses.reduce((s, e) => e.ts >= a && e.ts < b ? s + e.qty : s, 0);
+  const recent = cnt(now - 14 * DAY, now + 1) / 14;
+  const hasLY = uses.some(e => e.ts <= now - LY);
+  let k = 1;
+  if (hasLY) {
+    const ly14 = cnt(now - LY - 14 * DAY, now - LY);
+    if (ly14 > 0) k = Math.min(2.5, Math.max(0.4, recent * 14 / ly14));
+  } else if (recent * 14 < 2) return null;
+  let left = n;
+  for (let d = 0; d < 365; d++) {
+    const t = now + d * DAY;
+    left -= hasLY ? k * cnt(t - LY - 7 * DAY, t - LY + 8 * DAY) / 15 : recent;
+    if (left <= 0) return { days: d + 1, date: now + (d + 1) * DAY, basis: hasLY ? 'ly' : 'recent' };
+  }
+  return { never: true };
+}
 
 function addEvent(type, qty, kg, total, ts) {
   const e = { id: uid(), type, qty, kg, ts: ts || Date.now() };
@@ -232,8 +302,28 @@ function viewStock() {
     : avail.map(([kg, q]) => `<button class="big" data-use="${kg}">Un sac de ${nf.format(kg)} kg<small>${q} en stock</small></button>`).join('');
   const cls = n <= 0 ? 'zero' : n <= low ? 'low' : '';
   const uses = S.events.filter(e => e.type === 'use');
-  const recent = uses.filter(e => e.ts > Date.now() - 14 * DAY).reduce((s, e) => s + e.qty, 0);
-  const autonomy = n > 0 && recent >= 2 ? `≈ ${Math.round(n / (recent / 14))} jours au rythme actuel` : '';
+  const fc = forecast();
+  const autonomy = fc && !fc.never ? `≈ ${fc.days} jour${fc.days > 1 ? 's' : ''} restant${fc.days > 1 ? 's' : ''}` : '';
+  let fcHtml = '';
+  if (fc && fc.never) {
+    fcHtml = `<div class="card"><small class="mut">Prévision</small><div>Stock suffisant pour plus d'un an au rythme prévu.</div></div>`;
+  } else if (fc) {
+    const orderBy = fc.date - S.settings.lead * DAY;
+    const late = orderBy <= Date.now();
+    fcHtml = `<div class="grid">
+      <div class="stat"><small>Rupture estimée</small><b>${dShort(fc.date)}</b></div>
+      <div class="stat"><small>Commander avant</small><b class="${late ? 'bad' : ''}">${late ? 'Maintenant' : dShort(orderBy)}</b></div></div>
+      <p class="note" style="margin:-4px 0 0">${fc.basis === 'ly' ? "D'après ta consommation de l'an dernier, ajustée à ton rythme actuel" : 'D\'après le rythme des 14 derniers jours'} · livraison sous ${S.settings.lead} j</p>`;
+  }
+  const tasks = S.tasks.map(t => ({ t, s: taskState(t) }));
+  const dueN = tasks.filter(x => x.s.state === 'due').length;
+  const maint = `<h1 style="margin-top:26px">Entretien${dueN ? ` · ${dueN} à faire` : ''}</h1>
+    <div class="list">${tasks.map(({ t, s }) => {
+      const parts = [];
+      if (t.bags) parts.push(`${nf.format(s.used)} / ${t.bags} sacs`);
+      if (t.months) parts.push(`${Math.floor(s.months)} / ${t.months} mois`);
+      return `<div class="task ${s.state}"><button class="tinfo" data-task="${t.id}"><b>${esc(t.name)}</b><small>${s.state === 'due' ? 'À faire · ' : ''}${parts.join(' · ')}</small><div class="prog"><i style="width:${Math.min(100, s.r * 100)}%"></i></div></button><button class="done" data-done="${t.id}">Fait</button></div>`;
+    }).join('')}<button class="item add" data-task="new"><span class="t"><b>+ Ajouter une tâche</b></span></button></div>`;
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const today = uses.filter(e => e.ts >= start.getTime()).reduce((s, e) => s + e.qty, 0);
   const lastUse = uses.length ? Math.max(...uses.map(e => e.ts)) : null;
@@ -251,7 +341,9 @@ function viewStock() {
     ${intro}
     <div class="uses">${useButtons}</div>
     <button class="ghost" data-act="add">+ Ajouter des sacs (achat)</button>
-    <p class="last">${today ? `Aujourd'hui : ${plural(today, 'sac')}` : 'Aucun sac mis aujourd\'hui'}${lastUse ? ` · dernier à ${tFmt.format(lastUse)}, ${relDay(lastUse)}` : ''}</p>`;
+    <p class="last">${today ? `Aujourd'hui : ${plural(today, 'sac')}` : 'Aucun sac mis aujourd\'hui'}${lastUse ? ` · dernier à ${tFmt.format(lastUse)}, ${relDay(lastUse)}` : ''}</p>
+    ${fcHtml}
+    ${maint}`;
 }
 function relDay(ts) {
   const a = new Date(); a.setHours(0, 0, 0, 0);
@@ -284,10 +376,14 @@ function viewStats() {
   const list = all ? S.events : S.events.filter(e => periodOf(e.ts).key === ui.period);
   const a = aggregate(list);
 
-  let bars;
+  let bars, note = '';
   if (all) {
     const rows = [...pers].reverse().map(p => ({ l: p.label.length > 5 ? p.label.slice(2) : p.label, v: aggregate(S.events.filter(e => periodOf(e.ts).key === p.key)).used }));
     bars = chart(rows);
+  } else if (ui.grain === 'week') {
+    const w = weekRows(ui.period, list.filter(e => e.type === 'use'));
+    bars = chart(w.rows);
+    note = w.note;
   } else {
     const order = monthOrder();
     const v = order.map(() => 0);
@@ -300,6 +396,19 @@ function viewStats() {
     return `<tr><td>${p.label}</td><td>${x.used}</td><td>${eur.format(x.spent)}</td><td>${x.bought ? eur.format(x.avg) : '–'}</td><td>${x.kgBought ? eur.format(x.perKg) : '–'}</td></tr>`;
   }).join('');
   const total = aggregate(S.events);
+
+  let budgetHtml = '';
+  const B = S.settings.budget;
+  if (B > 0 && !all) {
+    const pct = a.spent / B, left = B - a.spent;
+    const pk = +ui.period - 1;
+    const prevLabel = S.settings.season ? `${pk}–${String(pk + 1).slice(2)}` : String(pk);
+    const prev = aggregate(S.events.filter(e => periodOf(e.ts).key === String(pk)));
+    budgetHtml = `<div class="card"><small class="mut">Budget ${S.settings.season ? 'de la saison' : 'de l\'année'}</small>
+      <div class="prog thick"><i class="${pct > 1 ? 'over' : pct > 0.85 ? 'warn' : ''}" style="width:${Math.min(100, pct * 100)}%"></i></div>
+      <div class="brow"><span><b>${eur.format(a.spent)}</b> sur ${eur.format(B)}</span><span class="${left < 0 ? 'bad' : 'mut'}">${left >= 0 ? `reste ${eur.format(left)}` : `dépassé de ${eur.format(-left)}`}</span></div>
+      ${prev.spent ? `<p class="note">${prevLabel} : ${eur.format(prev.spent)} dépensés au total</p>` : ''}</div>`;
+  }
 
   return `
     <h1>Statistiques</h1>
@@ -315,15 +424,46 @@ function viewStats() {
       <div class="stat"><small>Prix moyen du sac</small><b>${a.bought ? eur.format(a.avg) : '–'}</b></div>
       <div class="stat"><small>Prix au kg</small><b>${a.kgBought ? eur.format(a.perKg) : '–'}</b></div>
     </div>
-    <div class="card"><small style="color:var(--muted)">Sacs consommés ${all ? 'par ' + (S.settings.season ? 'saison' : 'année') : 'par mois'}</small>${bars}</div>
+    ${budgetHtml}
+    <div class="card"><div class="cardhead"><small>Sacs consommés ${all ? 'par ' + (S.settings.season ? 'saison' : 'année') : ui.grain === 'week' ? 'par semaine' : 'par mois'}</small>
+      ${all ? '' : `<div class="mini"><button data-grain="month" class="${ui.grain === 'month' ? 'on' : ''}">Mois</button><button data-grain="week" class="${ui.grain === 'week' ? 'on' : ''}">Semaine</button></div>`}</div>
+      ${bars}${note ? `<p class="note">${note}</p>` : ''}</div>
     <div class="card"><small style="color:var(--muted)">Par ${S.settings.season ? 'saison (sept → août)' : 'année'}</small>
       <table><tr><th></th><th>Brûlés</th><th>Dépensé</th><th>€/sac</th><th>€/kg</th></tr>${table}
       <tr><td><b>Total</b></td><td><b>${total.used}</b></td><td><b>${eur.format(total.spent)}</b></td><td><b>${total.bought ? eur.format(total.avg) : '–'}</b></td><td><b>${total.kgBought ? eur.format(total.perKg) : '–'}</b></td></tr></table>
     </div>`;
 }
+function periodRange(key) {
+  const y = +key;
+  return S.settings.season ? [new Date(y, 8, 1), new Date(y + 1, 8, 1)] : [new Date(y, 0, 1), new Date(y + 1, 0, 1)];
+}
+// Sacs brûlés par semaine (lundi → dimanche) sur toute la période.
+function weekRows(key, uses) {
+  const [from, to] = periodRange(key);
+  const monday = d => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };
+  const first = monday(from);
+  const n = Math.ceil(Math.round((to - first) / DAY) / 7);
+  const v = Array(n).fill(0);
+  uses.forEach(e => {
+    const i = Math.round((monday(new Date(e.ts)) - first) / (7 * DAY));
+    if (i >= 0 && i < n) v[i] += e.qty;
+  });
+  const start = i => { const d = new Date(first); d.setDate(d.getDate() + 7 * i); return d; };
+  const rows = v.map((q, i) => {
+    let l = '';
+    for (let k = 0; k < 7; k++) { const d = start(i); d.setDate(d.getDate() + k); if (d.getDate() === 1) l = MONTHS[d.getMonth()][0]; }
+    return { l, v: q };
+  });
+  const active = v.filter(q => q > 0);
+  if (!active.length) return { rows, note: '' };
+  const peak = Math.max(...v), pi = v.indexOf(peak);
+  const avg = active.reduce((s, q) => s + q, 0) / active.length;
+  return { rows, note: `Moyenne ${nf.format(avg)} sac${avg >= 2 ? 's' : ''} par semaine de chauffe · pic de ${peak} sac${peak >= 2 ? 's' : ''} la semaine du ${dShort(start(pi))}` };
+}
 function chart(rows) {
   const max = Math.max(1, ...rows.map(r => r.v));
-  return `<div class="chart">${rows.map(r => `<div class="bar"><em>${r.v || ''}</em><i class="${r.v ? '' : 'z'}" style="height:${r.v ? Math.max(4, r.v / max * 78) : 2}px"></i><span>${r.l}</span></div>`).join('')}</div>`;
+  const dense = rows.length > 16;
+  return `<div class="chart ${dense ? 'dense' : ''}">${rows.map(r => `<div class="bar"><em>${dense ? '' : r.v || ''}</em><i class="${r.v ? '' : 'z'}" style="height:${r.v ? Math.max(4, r.v / max * 78) : 2}px"></i><span>${r.l}</span></div>`).join('')}</div>`;
 }
 
 function viewSettings() {
@@ -333,6 +473,8 @@ function viewSettings() {
     <h1>Réglages</h1>
     <div class="card">
       <div class="row-set"><span>Alerte stock bas (sacs)</span><input type="number" inputmode="numeric" min="0" step="1" value="${s.low}" data-set="low"></div>
+      <div class="row-set"><span>Délai de livraison (jours)</span><input type="number" inputmode="numeric" min="1" step="1" value="${s.lead}" data-set="lead"></div>
+      <div class="row-set"><span>Budget ${s.season ? 'par saison' : 'par an'} (€, 0 = aucun)</span><input type="number" inputmode="numeric" min="0" step="10" value="${s.budget}" data-set="budget"></div>
       <div class="row-set"><span>Stats par saison (sept → août)</span><input type="checkbox" ${s.season ? 'checked' : ''} data-set="season"></div>
     </div>
     <div class="card">
@@ -399,6 +541,46 @@ function openForm(ev, type) {
   if (!dlg.open) dlg.showModal();
 }
 
+/* ---------- tâches d'entretien ---------- */
+function openTask(id) {
+  const t = id === 'new' ? null : S.tasks.find(x => x.id === id);
+  if (id !== 'new' && !t) return;
+  dlg.innerHTML = `<form id="f">
+    <h2>${t ? 'Tâche d\'entretien' : 'Nouvelle tâche'}</h2>
+    <label>Nom<input name="name" required maxlength="60" value="${t ? esc(t.name) : ''}" placeholder="ex. Nettoyer le creuset"></label>
+    <label>À refaire tous les … sacs <small>(vide = pas de règle)</small><input name="bags" type="number" inputmode="numeric" min="0" step="1" value="${t && t.bags ? t.bags : ''}"></label>
+    <label>… et/ou tous les … mois<input name="months" type="number" inputmode="numeric" min="0" step="1" value="${t && t.months ? t.months : ''}"></label>
+    <label>Dernière fois<input name="date" type="date" required value="${ymd(t ? t.last : Date.now())}"></label>
+    <div class="total" id="err" style="color:var(--bad)"></div>
+    <div class="btns">${t ? '<button type="button" class="danger" data-del>Supprimer</button>' : ''}<button type="button" data-close>Annuler</button><button class="primary">Enregistrer</button></div>
+  </form>`;
+  const f = $('#f');
+  f.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.hasAttribute('data-close')) dlg.close();
+    if (b.hasAttribute('data-del') && confirm('Supprimer cette tâche ?')) {
+      S.tasks = S.tasks.filter(x => x.id !== t.id); save(); dlg.close(); render();
+    }
+  });
+  f.addEventListener('submit', e => {
+    e.preventDefault();
+    const bags = Math.max(0, Math.round(+f.bags.value) || 0), months = Math.max(0, Math.round(+f.months.value) || 0);
+    if (!bags && !months) { $('#err').textContent = 'Indique un nombre de sacs ou de mois.'; return; }
+    const day = f.date.value;
+    const last = t && ymd(t.last) === day ? t.last : (day === ymd(Date.now()) ? Date.now() : new Date(day + 'T12:00:00').getTime());
+    const data = { name: f.name.value.trim(), bags, months, last };
+    if (t) Object.assign(t, data); else S.tasks.push({ id: uid(), ...data });
+    save(); dlg.close(); render();
+  });
+  if (!dlg.open) dlg.showModal();
+}
+function markDone(id) {
+  const t = S.tasks.find(x => x.id === id); if (!t) return;
+  const prev = t.last;
+  t.last = Date.now(); save(); render();
+  toast(`« ${esc(t.name)} » fait`, () => { t.last = prev; save(); render(); });
+}
+
 /* ---------- actions ---------- */
 function useBag(kg) {
   if (typeof kg !== 'number' || stockOf(kg) <= 0) { toast('Stock vide : ajoute un achat ou une correction'); return; }
@@ -447,6 +629,12 @@ document.addEventListener('click', e => {
   if (per) { ui.period = per.dataset.period; render(); return; }
   const ed = e.target.closest('[data-edit]');
   if (ed) { openForm(S.events.find(x => x.id === ed.dataset.edit)); return; }
+  const gr = e.target.closest('[data-grain]');
+  if (gr) { ui.grain = gr.dataset.grain; render(); return; }
+  const done = e.target.closest('[data-done]');
+  if (done) { markDone(done.dataset.done); return; }
+  const task = e.target.closest('[data-task]');
+  if (task) { openTask(task.dataset.task); return; }
   const use = e.target.closest('[data-use]');
   if (use) { useBag(+use.dataset.use); return; }
   const act = e.target.closest('[data-act]');
@@ -457,7 +645,7 @@ document.addEventListener('click', e => {
     init: () => openForm(null, 'adjust'),
     export: exportData,
     import: () => $('#file').click(),
-    reset: () => { if (confirm('Effacer tout l\'historique ? Cette action est définitive.')) { S = { settings: { ...DEFAULTS }, events: [] }; save(); render(); } }
+    reset: () => { if (confirm('Effacer tout l\'historique ? Cette action est définitive.')) { S = normalize({}); save(); render(); } }
   })[act.dataset.act]();
 });
 document.addEventListener('change', e => {
