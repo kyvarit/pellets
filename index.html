@@ -154,10 +154,10 @@ dialog input{display:block;width:100%;margin-top:4px;padding:12px;border:1px sol
 'use strict';
 const KEY = 'pellets.v1';
 const DEFAULTS = { kg: 15, low: 3, season: false, lastBackup: null, lead: 10, budget: 0 };
-// Base Firestore de la synchronisation. La clé est publique par conception : ce sont les
-// règles de sécurité de la base (lecture/écriture d'un seul document, code secret de 24+
-// caractères, pas de liste ni de suppression) qui protègent les données.
-const FB = { project: 'pellets-sync', key: 'AIzaSyBpyrz9V00qPdvmRKiXFdpa4GwoPoszNkk' };
+// Base Firestore de la synchronisation, appelée sans clé d'API : ce sont les règles de
+// sécurité de la base (lecture/écriture d'un seul document, code secret de 24+ caractères,
+// pas de liste ni de suppression) qui protègent les données.
+const FB = { project: 'pellets-sync' };
 const FS_URL = `https://firestore.googleapis.com/v1/projects/${FB.project}/databases/(default)/documents/stocks`;
 const SYNC_KEY = 'pellets.sync';
 const $ = s => document.querySelector(s);
@@ -647,7 +647,7 @@ const cleanCode = s => group4(String(s).toLowerCase().replace(/[^a-z0-9]/g, ''))
 const codeOk = c => c.replace(/-/g, '').length >= 24;
 
 async function fsGet(code) {
-  const r = await fetch(`${FS_URL}/${code}?key=${FB.key}`);
+  const r = await fetch(`${FS_URL}/${code}`);
   if (r.status === 404) return null;
   if (!r.ok) throw new Error('get ' + r.status);
   const j = await r.json();
@@ -656,7 +656,7 @@ async function fsGet(code) {
 // Écrit si le document n'a pas bougé depuis la lecture ; renvoie false en cas de conflit.
 async function fsPut(code, state, updateTime) {
   const cond = updateTime ? `currentDocument.updateTime=${encodeURIComponent(updateTime)}` : 'currentDocument.exists=false';
-  const r = await fetch(`${FS_URL}/${code}?key=${FB.key}&${cond}`, {
+  const r = await fetch(`${FS_URL}/${code}?${cond}`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ fields: { data: { stringValue: JSON.stringify(state) }, u: { integerValue: String(Date.now()) } } })
   });
