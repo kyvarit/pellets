@@ -86,6 +86,15 @@ tr:last-child td{border-bottom:0}
 .row-set input[type=number]{width:84px;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--bg);text-align:right}
 .row-set input[type=checkbox]{width:22px;height:22px;accent-color:var(--accent)}
 .note{color:var(--muted);font-size:13px;margin:6px 0 0}
+.sync-ind{float:right;font-size:12px;font-weight:600;letter-spacing:0;text-transform:none}
+.sync-ind.err{color:var(--bad)}
+.sync-ind.ok{color:var(--ok)}
+.code{padding:12px;border:1px dashed var(--line);border-radius:12px;background:var(--bg);font:600 14px ui-monospace,Menlo,monospace;text-align:center;overflow-wrap:anywhere;user-select:all}
+details{margin-top:10px}
+summary{cursor:pointer;color:var(--accent);font-weight:600}
+.steps{margin:10px 0 6px;padding-left:20px;color:var(--text)}
+.steps li{margin:4px 0}
+.quick nav{display:none}
 .mut{color:var(--muted)}
 .bad{color:var(--bad)}
 .last + .grid{margin-top:16px}
@@ -145,6 +154,12 @@ dialog input{display:block;width:100%;margin-top:4px;padding:12px;border:1px sol
 'use strict';
 const KEY = 'pellets.v1';
 const DEFAULTS = { kg: 15, low: 3, season: false, lastBackup: null, lead: 10, budget: 0 };
+// Base Firestore de la synchronisation. La clé est publique par conception : ce sont les
+// règles de sécurité de la base (lecture/écriture d'un seul document, code secret de 24+
+// caractères, pas de liste ni de suppression) qui protègent les données.
+const FB = { project: 'pellets-sync', key: 'AIzaSyBpyrz9V00qPdvmRKiXFdpa4GwoPoszNkk' };
+const FS_URL = `https://firestore.googleapis.com/v1/projects/${FB.project}/databases/(default)/documents/stocks`;
+const SYNC_KEY = 'pellets.sync';
 const $ = s => document.querySelector(s);
 const eur = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' });
 const nf = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 1 });
@@ -156,6 +171,9 @@ const DAY = 86400000;
 /* ---------- données ---------- */
 let S = load();
 let ui = { tab: 'stock', period: null, grain: 'month' };
+const sync = { code: readCode(), status: 'idle', at: null, busy: false, again: false, timer: null };
+function readCode() { try { return localStorage.getItem(SYNC_KEY) || ''; } catch (e) { return ''; } }
+function writeCode(c) { try { if (c) localStorage.setItem(SYNC_KEY, c); else localStorage.removeItem(SYNC_KEY); } catch (e) {} }
 
 function load() {
   try {
@@ -169,18 +187,22 @@ function normalize(d) {
   const settings = { ...DEFAULTS, ...d.settings };
   const events = (Array.isArray(d.events) ? d.events : []).map(e => {
     const x = { ...e };
+    x.u = x.u || x.ts;
     if (!x.kg) x.kg = settings.kg;
     if (x.type === 'buy' && x.total == null) x.total = (x.price || 0) * x.qty;
     delete x.price;
     return x;
   });
-  const tasks = Array.isArray(d.tasks) ? d.tasks : defaultTasks();
-  return { settings, events, tasks };
+  const tasks = (Array.isArray(d.tasks) ? d.tasks : defaultTasks()).map(t => ({ ...t, u: t.u || t.last }));
+  // gone : id → date de suppression, pour que la synchro n'y ressuscite pas une ligne effacée.
+  const gone = d.gone && typeof d.gone === 'object' ? d.gone : {};
+  return { settings, events, tasks, gone, settingsU: d.settingsU || 0 };
 }
-function save() {
-  try { localStorage.setItem(KEY, JSON.stringify({ v: 1, ...S })); }
+function persist() {
+  try { localStorage.setItem(KEY, JSON.stringify({ v: 2, ...S })); }
   catch (e) { toast('Sauvegarde impossible sur cet appareil'); }
 }
+function save() { persist(); scheduleSync(); }
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const dShort = ts => {
@@ -193,9 +215,9 @@ const stock = () => S.events.reduce((n, e) => n + delta(e), 0);
 const ymd = ts => { const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const plural = (n, w) => `${nf.format(n)} ${w}${Math.abs(n) >= 2 ? 's' : ''}`;
 const lastKg = () => (sorted().find(e => e.type === 'buy') || {}).kg || S.settings.kg;
-function stockByKg() {
+function stockByKg(events = S.events) {
   const m = new Map();
-  S.events.forEach(e => m.set(e.kg, (m.get(e.kg) || 0) + delta(e)));
+  events.forEach(e => m.set(e.kg, (m.get(e.kg) || 0) + delta(e)));
   return m;
 }
 const stockOf = kg => stockByKg().get(kg) || 0;
@@ -243,7 +265,7 @@ function forecast() {
 }
 
 function addEvent(type, qty, kg, total, ts) {
-  const e = { id: uid(), type, qty, kg, ts: ts || Date.now() };
+  const e = { id: uid(), type, qty, kg, ts: ts || Date.now(), u: Date.now() };
   if (type === 'buy') e.total = total;
   S.events.push(e);
   save();
@@ -332,7 +354,7 @@ function viewStock() {
     <div class="card"><p>Bienvenue. Commence par indiquer le nombre de sacs que tu as en stock.</p>
     <button class="ghost" data-act="init">Renseigner mon stock actuel</button></div>`;
   return `
-    <h1>Poêle à pellets</h1>
+    <h1>Poêle à pellets${syncInd()}</h1>
     <section class="hero">
       <div class="count ${cls}">${n}</div>
       <div class="unit">sac${Math.abs(n) >= 2 ? 's' : ''} en stock</div>
@@ -477,8 +499,9 @@ function viewSettings() {
       <div class="row-set"><span>Budget ${s.season ? 'par saison' : 'par an'} (€, 0 = aucun)</span><input type="number" inputmode="numeric" min="0" step="10" value="${s.budget}" data-set="budget"></div>
       <div class="row-set"><span>Stats par saison (sept → août)</span><input type="checkbox" ${s.season ? 'checked' : ''} data-set="season"></div>
     </div>
+    ${syncCard()}
     <div class="card">
-      <p>Les données restent sur ton téléphone. Fais une sauvegarde de temps en temps (par exemple après chaque achat) et enregistre-la dans Fichiers ou iCloud.</p>
+      <p>Une sauvegarde sous forme de fichier, à ranger dans Fichiers ou iCloud, reste utile en secours (par exemple après chaque achat).</p>
       <div class="row-set" style="border:0;padding-top:0"><button class="btn" data-act="export">Sauvegarder</button><button class="btn" data-act="import">Restaurer</button></div>
       <p class="note">${bk}</p>
     </div>
@@ -520,7 +543,7 @@ function openForm(ev, type) {
     if (t.dataset.t) openForm(null, t.dataset.t);
     if (t.hasAttribute('data-close')) dlg.close();
     if (t.hasAttribute('data-del') && confirm('Supprimer cette ligne ?')) {
-      S.events = S.events.filter(x => x.id !== ev.id); save(); dlg.close(); render();
+      S.events = S.events.filter(x => x.id !== ev.id); S.gone[ev.id] = Date.now(); save(); dlg.close(); render();
     }
   });
   f.addEventListener('submit', e => {
@@ -534,7 +557,10 @@ function openForm(ev, type) {
     if (!qty) { dlg.close(); return; }
     if (type === 'buy' && !(qty > 0)) return;
     const total = type === 'buy' ? +f.total.value : undefined;
-    if (editing) { ev.qty = qty; ev.kg = kg; ev.ts = ts; if (type === 'buy') ev.total = total; save(); }
+    if (editing) {
+      const tgt = S.events.find(x => x.id === ev.id);
+      if (tgt) { Object.assign(tgt, { qty, kg, ts, u: Date.now() }); if (type === 'buy') tgt.total = total; save(); }
+    }
     else addEvent(type, qty, kg, total, ts);
     dlg.close(); render();
   });
@@ -559,7 +585,7 @@ function openTask(id) {
     const b = e.target.closest('button'); if (!b) return;
     if (b.hasAttribute('data-close')) dlg.close();
     if (b.hasAttribute('data-del') && confirm('Supprimer cette tâche ?')) {
-      S.tasks = S.tasks.filter(x => x.id !== t.id); save(); dlg.close(); render();
+      S.tasks = S.tasks.filter(x => x.id !== t.id); S.gone[t.id] = Date.now(); save(); dlg.close(); render();
     }
   });
   f.addEventListener('submit', e => {
@@ -568,8 +594,9 @@ function openTask(id) {
     if (!bags && !months) { $('#err').textContent = 'Indique un nombre de sacs ou de mois.'; return; }
     const day = f.date.value;
     const last = t && ymd(t.last) === day ? t.last : (day === ymd(Date.now()) ? Date.now() : new Date(day + 'T12:00:00').getTime());
-    const data = { name: f.name.value.trim(), bags, months, last };
-    if (t) Object.assign(t, data); else S.tasks.push({ id: uid(), ...data });
+    const data = { name: f.name.value.trim(), bags, months, last, u: Date.now() };
+    const tgt = t && S.tasks.find(x => x.id === t.id);
+    if (tgt) Object.assign(tgt, data); else if (!t) S.tasks.push({ id: uid(), ...data });
     save(); dlg.close(); render();
   });
   if (!dlg.open) dlg.showModal();
@@ -577,8 +604,234 @@ function openTask(id) {
 function markDone(id) {
   const t = S.tasks.find(x => x.id === id); if (!t) return;
   const prev = t.last;
-  t.last = Date.now(); save(); render();
-  toast(`« ${esc(t.name)} » fait`, () => { t.last = prev; save(); render(); });
+  t.last = Date.now(); t.u = t.last; save(); render();
+  toast(`« ${esc(t.name)} » fait`, () => {
+    const cur = S.tasks.find(x => x.id === id);
+    if (cur) { cur.last = prev; cur.u = Date.now(); save(); render(); }
+  });
+}
+
+/* ---------- synchronisation (Firestore) ---------- */
+// Chaque appareil garde ses données en local et les fusionne avec un document distant
+// (identifié par le code secret). Fusion ligne par ligne : la modification la plus récente
+// gagne, et les suppressions sont conservées dans `gone`.
+const payload = s => ({
+  events: s.events, tasks: s.tasks, gone: s.gone,
+  settings: Object.fromEntries(Object.entries(s.settings).filter(([k]) => k !== 'lastBackup')),
+  settingsU: s.settingsU || 0
+});
+const stable = v => JSON.stringify(v, (k, x) =>
+  Array.isArray(x) ? (x[0] && x[0].id ? [...x].sort((a, b) => a.id < b.id ? -1 : 1) : x)
+    : x && typeof x === 'object' ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => a < b ? -1 : 1)) : x);
+
+function mergeStates(a, b) {
+  const gone = { ...a.gone };
+  Object.entries(b.gone || {}).forEach(([id, u]) => { gone[id] = Math.max(gone[id] || 0, u); });
+  Object.keys(gone).forEach(id => { if (gone[id] < Date.now() - 400 * DAY) delete gone[id]; });
+  const pick = (x, y) => {
+    const m = new Map();
+    [...x, ...y].forEach(it => { const c = m.get(it.id); if (!c || (it.u || 0) > (c.u || 0)) m.set(it.id, it); });
+    return [...m.values()].filter(it => !(gone[it.id] >= (it.u || 0)));
+  };
+  const theirsNewer = (b.settingsU || 0) > (a.settingsU || 0);
+  return {
+    events: pick(a.events, b.events), tasks: pick(a.tasks, b.tasks), gone,
+    settings: theirsNewer ? b.settings : a.settings, settingsU: Math.max(a.settingsU || 0, b.settingsU || 0)
+  };
+}
+
+const ALPHA = 'abcdefghjkmnpqrstuvwxyz23456789';
+const group4 = s => s.replace(/(.{4})(?=.)/g, '$1-');
+const newCode = () => group4(Array.from(crypto.getRandomValues(new Uint8Array(24)), v => ALPHA[v % ALPHA.length]).join(''));
+const cleanCode = s => group4(String(s).toLowerCase().replace(/[^a-z0-9]/g, ''));
+const codeOk = c => c.replace(/-/g, '').length >= 24;
+
+async function fsGet(code) {
+  const r = await fetch(`${FS_URL}/${code}?key=${FB.key}`);
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error('get ' + r.status);
+  const j = await r.json();
+  return { state: JSON.parse(j.fields.data.stringValue), updateTime: j.updateTime };
+}
+// Écrit si le document n'a pas bougé depuis la lecture ; renvoie false en cas de conflit.
+async function fsPut(code, state, updateTime) {
+  const cond = updateTime ? `currentDocument.updateTime=${encodeURIComponent(updateTime)}` : 'currentDocument.exists=false';
+  const r = await fetch(`${FS_URL}/${code}?key=${FB.key}&${cond}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: { data: { stringValue: JSON.stringify(state) }, u: { integerValue: String(Date.now()) } } })
+  });
+  if (r.ok) return true;
+  const st = ((await r.json().catch(() => ({}))).error || {}).status;
+  if (st === 'FAILED_PRECONDITION' || st === 'ABORTED' || st === 'ALREADY_EXISTS') return false;
+  throw new Error('put ' + r.status);
+}
+// Lit, modifie, réécrit le document distant (avec nouvelle tentative en cas de conflit).
+async function remoteEdit(code, fn) {
+  for (let i = 0; i < 4; i++) {
+    const remote = await fsGet(code);
+    if (!remote) throw new Error('unknown');
+    const st = payload(normalize(remote.state));
+    const result = fn(st);
+    if (result && result.empty) return result;
+    if (await fsPut(code, st, remote.updateTime)) return result;
+  }
+  throw new Error('conflict');
+}
+
+const SYNC_LABEL = { idle: 'Synchro…', busy: 'Synchro…', ok: 'Synchronisé', offline: 'Hors ligne', err: 'Erreur de synchro' };
+const syncInd = () => sync.code ? `<span class="sync-ind ${sync.status}">${SYNC_LABEL[sync.status]}</span>` : '';
+function setSync(status) {
+  sync.status = status;
+  document.querySelectorAll('.sync-ind').forEach(el => { el.textContent = SYNC_LABEL[status]; el.className = 'sync-ind ' + status; });
+  document.querySelectorAll('.sync-txt').forEach(el => { el.textContent = status === 'ok' && sync.at ? `Synchronisé à ${tFmt.format(sync.at)}` : SYNC_LABEL[status]; });
+}
+function scheduleSync() {
+  if (!sync.code) return;
+  clearTimeout(sync.timer);
+  sync.timer = setTimeout(syncNow, 1200);
+}
+function applyMerged(m) {
+  S.events = m.events; S.tasks = m.tasks; S.gone = m.gone; S.settingsU = m.settingsU;
+  S.settings = { ...DEFAULTS, ...m.settings, lastBackup: S.settings.lastBackup };
+  persist();
+  if (!(document.activeElement && document.activeElement.matches('#app input'))) render();
+}
+async function syncNow() {
+  if (!sync.code || document.body.classList.contains('quick')) return;
+  if (sync.busy) { sync.again = true; return; }
+  sync.busy = true; setSync('busy');
+  try {
+    for (let i = 0; i < 4; i++) {
+      const remote = await fsGet(sync.code);
+      const local = payload(S);
+      const theirs = remote ? payload(normalize(remote.state)) : null;
+      const merged = theirs ? mergeStates(local, theirs) : local;
+      if (stable(merged) !== stable(local)) applyMerged(merged);
+      if (theirs && stable(merged) === stable(theirs)) break;
+      if (await fsPut(sync.code, merged, remote && remote.updateTime)) break;
+      if (i === 3) throw new Error('conflict');
+    }
+    sync.at = Date.now(); setSync('ok');
+  } catch (e) {
+    setSync(navigator.onLine === false ? 'offline' : 'err');
+  } finally {
+    sync.busy = false;
+    if (sync.again) { sync.again = false; scheduleSync(); }
+  }
+}
+
+// Remplace tout (restauration d'un fichier, remise à zéro) en marquant l'ancien comme supprimé.
+function replaceAll(next) {
+  const now = Date.now(), gone = { ...S.gone };
+  [...S.events, ...S.tasks].forEach(x => { gone[x.id] = now; });
+  [...next.events, ...next.tasks].forEach(x => { x.u = now; delete gone[x.id]; });
+  S = { ...next, gone, settingsU: now, settings: { ...next.settings, lastBackup: S.settings.lastBackup } };
+  save();
+}
+
+async function startSync() {
+  sync.code = newCode(); writeCode(sync.code); setSync('idle');
+  ui.tab = 'settings'; render();
+  await syncNow();
+}
+function stopSync() {
+  if (!confirm('Arrêter la synchronisation sur cet appareil ? Ses données restent ici, et dans le cloud avec ton code.')) return;
+  sync.code = ''; writeCode(''); setSync('idle'); render();
+}
+function openJoin() {
+  dlg.innerHTML = `<form id="f">
+    <h2>Rejoindre avec un code</h2>
+    <p class="note" style="margin:0 0 12px">Les données de cet appareil seront remplacées par celles du code.</p>
+    <label>Code de synchronisation<input name="code" required autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="xxxx-xxxx-xxxx-xxxx-xxxx-xxxx"></label>
+    <div class="total" id="err" style="color:var(--bad)"></div>
+    <div class="btns"><button type="button" data-close>Annuler</button><button class="primary">Rejoindre</button></div>
+  </form>`;
+  const f = $('#f');
+  f.addEventListener('click', e => { if (e.target.closest('[data-close]')) dlg.close(); });
+  f.addEventListener('submit', async e => {
+    e.preventDefault();
+    const code = cleanCode(f.code.value);
+    if (!codeOk(code)) { $('#err').textContent = 'Ce code est trop court.'; return; }
+    $('#err').textContent = 'Recherche…';
+    try {
+      const remote = await fsGet(code);
+      if (!remote) { $('#err').textContent = 'Code inconnu. Vérifie-le et réessaie.'; return; }
+      S = normalize(remote.state);
+      sync.code = code; writeCode(code); persist();
+      sync.at = Date.now(); setSync('ok');
+      dlg.close(); render(); toast('Stock récupéré');
+    } catch (err) { $('#err').textContent = 'Impossible de joindre le serveur.'; }
+  });
+  if (!dlg.open) dlg.showModal();
+}
+async function copyText(t, msg) {
+  try { await navigator.clipboard.writeText(t); toast(msg); }
+  catch (e) { toast('Copie impossible : sélectionne le texte à la main'); }
+}
+
+function syncCard() {
+  if (!sync.code) return `<div class="card"><h2 style="font-size:17px">Synchronisation</h2>
+    <p>Retrouve ton stock et ton historique sur ton iPad ou sur un nouveau téléphone. Sans cela, chaque appareil a son propre stock.</p>
+    <div class="row-set" style="border:0;padding:0"><button class="btn" data-act="sync-start">Activer</button><button class="btn" data-act="sync-join">J'ai un code</button></div></div>`;
+  const base = location.origin + location.pathname.replace(/index\.html$/, '');
+  const kgs = [...new Set(S.events.map(e => e.kg))].sort((a, b) => b - a);
+  const links = [['Auto (dernier poids)', 'auto'], ...kgs.map(k => [`Sac de ${nf.format(k)} kg`, k])]
+    .map(([label, v]) => `<div class="row-set"><span>${label}</span><button class="btn" data-copy="${base}#use=${v}&code=${sync.code}">Copier le lien</button></div>`).join('');
+  return `<div class="card"><h2 style="font-size:17px">Synchronisation</h2>
+    <p>Sur l'autre appareil : Réglages → « J'ai un code ». Garde ce code secret : il donne accès à ton stock.</p>
+    <div class="code" data-act="sync-copy">${sync.code}</div>
+    <div class="row-set" style="border:0;padding:12px 0 0;flex-wrap:wrap;justify-content:flex-start"><button class="btn" data-act="sync-copy">Copier</button><button class="btn" data-act="sync-now">Synchroniser</button><button class="btn" data-act="sync-stop">Arrêter</button></div>
+    <p class="note sync-txt">${SYNC_LABEL[sync.status]}</p></div>
+  <div class="card"><h2 style="font-size:17px">Raccourci rapide</h2>
+    <p>Un lien qui retire un sac sans ouvrir l'app, pour l'app Raccourcis d'Apple ou Siri.</p>
+    ${links}
+    <details><summary>Comment l'installer ?</summary>
+      <ol class="steps">
+        <li>Touche « Copier le lien » sur la ligne voulue.</li>
+        <li>Ouvre l'app <b>Raccourcis</b>, touche « + », puis « Ajouter une action » et choisis <b>Ouvrir des URL</b>.</li>
+        <li>Colle le lien, nomme le raccourci « Sac de pellets », puis valide.</li>
+        <li>Lance-le avec « Dis Siri, sac de pellets », ou ajoute-le à l'écran d'accueil.</li>
+      </ol>
+      <p class="note">Le raccourci s'ouvre dans Safari, retire le sac et affiche une confirmation avec un bouton Annuler. Le lien contient ton code : ne le partage pas.</p>
+    </details></div>`;
+}
+
+// Ouverture depuis un raccourci (#use=15&code=…) : on agit directement sur le document distant,
+// sans dépendre des données locales de Safari (distinctes de celles de l'icône installée).
+async function quickMode(p) {
+  document.body.classList.add('quick');
+  const code = cleanCode(p.get('code') || ''), want = p.get('use');
+  history.replaceState(null, '', location.pathname + location.search);
+  const view = html => { $('#app').innerHTML = `<h1>Poêle à pellets</h1><div class="card" style="text-align:center">${html}</div>`; };
+  view('<div class="sub">Enregistrement…</div>');
+  try {
+    if (!codeOk(code)) throw new Error('unknown');
+    const res = await remoteEdit(code, st => {
+      const by = stockByKg(st.events);
+      let kg = want === 'auto' ? NaN : +want;
+      if (!(kg > 0)) {
+        const lastUse = st.events.filter(e => e.type === 'use').sort((a, b) => b.ts - a.ts)[0];
+        const avail = [...by].filter(([, q]) => q > 0).sort((a, b) => b[1] - a[1]);
+        kg = lastUse && (by.get(lastUse.kg) || 0) > 0 ? lastUse.kg : avail[0] && avail[0][0];
+      }
+      if (!(kg > 0) || (by.get(kg) || 0) <= 0) return { empty: true, kg };
+      const ev = { id: uid(), type: 'use', qty: 1, kg, ts: Date.now(), u: Date.now() };
+      st.events.push(ev);
+      return { ev, kg, left: by.get(kg) - 1, total: st.events.reduce((n, e) => n + delta(e), 0) };
+    });
+    if (res.empty) { view(`<div class="unit">Plus de sacs${res.kg > 0 ? ' de ' + nf.format(res.kg) + ' kg' : ''}</div><div class="sub">Rien n'a été retiré.</div>`); return; }
+    view(`<div class="count" style="font-size:64px">✓</div><div class="unit">Un sac de ${nf.format(res.kg)} kg retiré</div>
+      <div class="sub">Il en reste ${res.left} de ce poids · ${res.total} au total</div>
+      <button class="ghost" id="qundo" style="margin-top:18px">Annuler</button>`);
+    $('#qundo').onclick = async () => {
+      try {
+        await remoteEdit(code, st => { st.events = st.events.filter(e => e.id !== res.ev.id); st.gone[res.ev.id] = Date.now(); return {}; });
+        view('<div class="unit">Annulé</div><div class="sub">Le sac a été remis en stock.</div>');
+      } catch (e) { view('<div class="unit">Annulation impossible</div><div class="sub">Corrige-le depuis l\'historique de l\'app.</div>'); }
+    };
+  } catch (e) {
+    view(`<div class="unit">Échec</div><div class="sub">${e.message === 'unknown' ? 'Lien invalide ou code inconnu.' : 'Impossible de joindre le serveur. Réessaie.'}</div>`);
+  }
 }
 
 /* ---------- actions ---------- */
@@ -586,7 +839,7 @@ function useBag(kg) {
   if (typeof kg !== 'number' || stockOf(kg) <= 0) { toast('Stock vide : ajoute un achat ou une correction'); return; }
   const e = addEvent('use', 1, kg);
   render();
-  toast(`Un sac de ${nf.format(kg)} kg retiré du stock`,() => { S.events = S.events.filter(x => x.id !== e.id); save(); render(); });
+  toast(`Un sac de ${nf.format(kg)} kg retiré du stock`, () => { S.events = S.events.filter(x => x.id !== e.id); S.gone[e.id] = Date.now(); save(); render(); });
   if (navigator.vibrate) navigator.vibrate(15);
 }
 
@@ -617,8 +870,8 @@ $('#file').addEventListener('change', async ev => {
     const d = JSON.parse(await f.text());
     if (!Array.isArray(d.events)) throw 0;
     if (!confirm(`Remplacer les données actuelles par cette sauvegarde (${d.events.length} lignes) ?`)) return;
-    S = normalize(d);
-    save(); render(); toast('Sauvegarde restaurée');
+    replaceAll(normalize(d));
+    render(); toast('Sauvegarde restaurée');
   } catch (e) { toast('Fichier non valide'); }
 });
 
@@ -637,6 +890,8 @@ document.addEventListener('click', e => {
   if (task) { openTask(task.dataset.task); return; }
   const use = e.target.closest('[data-use]');
   if (use) { useBag(+use.dataset.use); return; }
+  const cp = e.target.closest('[data-copy]');
+  if (cp) { copyText(cp.dataset.copy, 'Lien copié'); return; }
   const act = e.target.closest('[data-act]');
   if (!act) return;
   ({
@@ -645,18 +900,31 @@ document.addEventListener('click', e => {
     init: () => openForm(null, 'adjust'),
     export: exportData,
     import: () => $('#file').click(),
-    reset: () => { if (confirm('Effacer tout l\'historique ? Cette action est définitive.')) { S = normalize({}); save(); render(); } }
+    reset: () => {
+      const msg = sync.code ? 'Effacer tout l\'historique, aussi sur tes autres appareils synchronisés ? Cette action est définitive.' : 'Effacer tout l\'historique ? Cette action est définitive.';
+      if (confirm(msg)) { replaceAll(normalize({})); render(); }
+    },
+    'sync-start': startSync,
+    'sync-join': openJoin,
+    'sync-copy': () => copyText(sync.code, 'Code copié'),
+    'sync-now': syncNow,
+    'sync-stop': stopSync
   })[act.dataset.act]();
 });
 document.addEventListener('change', e => {
   const k = e.target.dataset.set; if (!k) return;
   S.settings[k] = k === 'season' ? e.target.checked : Math.max(0, +e.target.value || DEFAULTS[k]);
+  S.settingsU = Date.now();
   save(); render();
 });
 dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
 
 /* ---------- démarrage ---------- */
-render();
+const quick = new URLSearchParams(location.hash.slice(1));
+if (quick.has('use')) quickMode(quick);
+else { render(); syncNow(); }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncNow(); });
+window.addEventListener('online', syncNow);
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
