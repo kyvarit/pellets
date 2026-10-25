@@ -288,14 +288,48 @@ function periods() {
   S.events.forEach(e => { const p = periodOf(e.ts); map.set(p.key, p.label); });
   return [...map].sort((a, b) => b[0] - a[0]).map(([key, label]) => ({ key, label }));
 }
+// Coût de chaque sac brûlé : le premier sac acheté est le premier brûlé (par poids de sac), donc
+// un sac brûlé coûte le prix du lot dont il vient, même s'il a été acheté une autre année.
+// Stock de départ ou sacs sans lot connu : prix moyen au kg de tous les achats.
+let COSTS = new Map();
+function useCosts() {
+  const evs = [...S.events].sort((a, b) => a.ts - b.ts || (a.type === 'use') - (b.type === 'use'));
+  const paid = evs.filter(e => e.type === 'buy' && e.total > 0);
+  const kgPaid = paid.reduce((s, e) => s + e.qty * e.kg, 0);
+  const avgPerKg = kgPaid ? paid.reduce((s, e) => s + e.total, 0) / kgPaid : 0;
+  const lots = new Map(), costs = new Map();
+  evs.forEach(e => {
+    const q = lots.get(e.kg) || [];
+    lots.set(e.kg, q);
+    if (e.type === 'use') {
+      let need = e.qty, cost = 0;
+      while (need > 0 && q.length) {
+        const take = Math.min(need, q[0].left);
+        cost += take * q[0].price; q[0].left -= take; need -= take;
+        if (q[0].left <= 0) q.shift();
+      }
+      costs.set(e.id, cost + need * avgPerKg * e.kg);
+    } else if (e.qty > 0) {
+      q.push({ left: e.qty, price: e.type === 'buy' && e.total != null ? e.total / e.qty : avgPerKg * e.kg });
+    } else {   // correction négative : des sacs disparus, sans coût de chauffage
+      let lose = -e.qty;
+      while (lose > 0 && q.length) {
+        const take = Math.min(lose, q[0].left);
+        q[0].left -= take; lose -= take;
+        if (q[0].left <= 0) q.shift();
+      }
+    }
+  });
+  return costs;
+}
 function aggregate(list) {
-  const a = { used: 0, bought: 0, spent: 0, kgUsed: 0, kgBought: 0 };
+  const a = { used: 0, bought: 0, spent: 0, cost: 0, kgUsed: 0, kgBought: 0 };
   list.forEach(e => {
-    if (e.type === 'use') { a.used += e.qty; a.kgUsed += e.qty * e.kg; }
+    if (e.type === 'use') { a.used += e.qty; a.kgUsed += e.qty * e.kg; a.cost += COSTS.get(e.id) || 0; }
     if (e.type === 'buy') { a.bought += e.qty; a.kgBought += e.qty * e.kg; a.spent += e.total || 0; }
   });
-  a.avg = a.bought ? a.spent / a.bought : 0;
-  a.perKg = a.kgBought ? a.spent / a.kgBought : 0;
+  a.avg = a.used ? a.cost / a.used : 0;
+  a.perKg = a.kgUsed ? a.cost / a.kgUsed : 0;
   return a;
 }
 
@@ -392,6 +426,7 @@ function viewHistory() {
 
 function viewStats() {
   if (!S.events.length) return `<h1>Statistiques</h1><div class="list"><div class="empty">Les stats apparaîtront dès les premiers sacs.</div></div>`;
+  COSTS = useCosts();
   const pers = periods();
   if (!ui.period || (ui.period !== 'all' && !pers.some(p => p.key === ui.period))) ui.period = pers[0].key;
   const all = ui.period === 'all';
@@ -415,21 +450,21 @@ function viewStats() {
 
   const table = pers.map(p => {
     const x = aggregate(S.events.filter(e => periodOf(e.ts).key === p.key));
-    return `<tr><td>${p.label}</td><td>${x.used}</td><td>${x.bought ? eur.format(x.spent) : '–'}</td><td>${x.bought ? eur.format(x.avg) : '–'}</td><td>${x.kgBought ? eur.format(x.perKg) : '–'}</td></tr>`;
+    return `<tr><td>${p.label}</td><td>${x.used}</td><td>${x.used ? eur.format(x.cost) : '–'}</td><td>${x.used ? eur.format(x.avg) : '–'}</td><td>${x.kgUsed ? eur.format(x.perKg) : '–'}</td></tr>`;
   }).join('');
   const total = aggregate(S.events);
 
   let budgetHtml = '';
   const B = S.settings.budget;
   if (B > 0 && !all) {
-    const pct = a.spent / B, left = B - a.spent;
+    const pct = a.cost / B, left = B - a.cost;
     const pk = +ui.period - 1;
     const prevLabel = S.settings.season ? `${pk}–${String(pk + 1).slice(2)}` : String(pk);
     const prev = aggregate(S.events.filter(e => periodOf(e.ts).key === String(pk)));
     budgetHtml = `<div class="card"><small class="mut">Budget ${S.settings.season ? 'de la saison' : 'de l\'année'}</small>
       <div class="prog thick"><i class="${pct > 1 ? 'over' : pct > 0.85 ? 'warn' : ''}" style="width:${Math.min(100, pct * 100)}%"></i></div>
-      <div class="brow"><span><b>${eur.format(a.spent)}</b> sur ${eur.format(B)}</span><span class="${left < 0 ? 'bad' : 'mut'}">${left >= 0 ? `reste ${eur.format(left)}` : `dépassé de ${eur.format(-left)}`}</span></div>
-      ${prev.spent ? `<p class="note">${prevLabel} : ${eur.format(prev.spent)} dépensés au total</p>` : ''}</div>`;
+      <div class="brow"><span><b>${eur.format(a.cost)}</b> sur ${eur.format(B)}</span><span class="${left < 0 ? 'bad' : 'mut'}">${left >= 0 ? `reste ${eur.format(left)}` : `dépassé de ${eur.format(-left)}`}</span></div>
+      ${prev.cost ? `<p class="note">${prevLabel} : ${eur.format(prev.cost)} dépensés au total</p>` : ''}</div>`;
   }
 
   return `
@@ -441,10 +476,10 @@ function viewStats() {
     <div class="grid">
       <div class="stat"><small>Sacs consommés</small><b>${a.used}</b></div>
       <div class="stat"><small>Poids brûlé</small><b>${nf.format(a.kgUsed)} kg</b></div>
-      <div class="stat"><small>Dépensé</small><b>${eur.format(a.spent)}</b></div>
-      <div class="stat"><small>Sacs achetés</small><b>${a.bought}</b></div>
-      <div class="stat"><small>Prix moyen du sac</small><b>${a.bought ? eur.format(a.avg) : '–'}</b></div>
-      <div class="stat"><small>Prix au kg</small><b>${a.kgBought ? eur.format(a.perKg) : '–'}</b></div>
+      <div class="stat"><small>Dépensé</small><b>${a.used ? eur.format(a.cost) : '–'}</b></div>
+      <div class="stat"><small>Prix moyen du sac</small><b>${a.used ? eur.format(a.avg) : '–'}</b></div>
+      <div class="stat"><small>Prix au kg</small><b>${a.kgUsed ? eur.format(a.perKg) : '–'}</b></div>
+      <div class="stat"><small>Acheté · ${a.bought} sac${a.bought > 1 ? 's' : ''}</small><b>${a.bought ? eur.format(a.spent) : '–'}</b></div>
     </div>
     ${budgetHtml}
     <div class="card"><div class="cardhead"><small>Sacs consommés ${all ? 'par ' + (S.settings.season ? 'saison' : 'année') : ui.grain === 'week' ? 'par semaine' : 'par mois'}</small>
@@ -452,7 +487,8 @@ function viewStats() {
       ${bars}${note ? `<p class="note">${note}</p>` : ''}</div>
     <div class="card"><small style="color:var(--muted)">Par ${S.settings.season ? 'saison (sept → août)' : 'année'}</small>
       <table><tr><th></th><th>Brûlés</th><th>Dépensé</th><th>€/sac</th><th>€/kg</th></tr>${table}
-      <tr><td><b>Total</b></td><td><b>${total.used}</b></td><td><b>${eur.format(total.spent)}</b></td><td><b>${total.bought ? eur.format(total.avg) : '–'}</b></td><td><b>${total.kgBought ? eur.format(total.perKg) : '–'}</b></td></tr></table>
+      <tr><td><b>Total</b></td><td><b>${total.used}</b></td><td><b>${total.used ? eur.format(total.cost) : '–'}</b></td><td><b>${total.used ? eur.format(total.avg) : '–'}</b></td><td><b>${total.kgUsed ? eur.format(total.perKg) : '–'}</b></td></tr></table>
+      <p class="note">« Dépensé » = le prix des sacs brûlés sur la période (le plus ancien lot d'abord), pas ce qui a été acheté.</p>
     </div>`;
 }
 function periodRange(key) {
