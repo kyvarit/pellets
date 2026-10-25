@@ -380,7 +380,7 @@ function viewHistory() {
   const rows = list.map(e => {
     const d = new Date(e.ts);
     const label = `${e.type === 'use' ? 'Mis dans le poêle' : e.type === 'buy' ? 'Achat' : 'Correction de stock'} · ${nf.format(e.kg)} kg`;
-    const detail = e.type === 'buy' ? `${eur.format(e.total)} · ${eur.format(e.total / e.qty)} / sac` : '';
+    const detail = e.type === 'buy' ? `${eur.format(e.total)} · ${eur.format(e.total / e.qty)} / sac${e.est ? ' (estimé)' : ''}` : '';
     const sign = delta(e) > 0 ? '+' : delta(e) < 0 ? '−' : '';
     return `<button class="item" data-edit="${e.id}">
       <span class="dot ${e.type}">${e.type === 'use' ? '−' : e.type === 'buy' ? '+' : '±'}</span>
@@ -415,7 +415,7 @@ function viewStats() {
 
   const table = pers.map(p => {
     const x = aggregate(S.events.filter(e => periodOf(e.ts).key === p.key));
-    return `<tr><td>${p.label}</td><td>${x.used}</td><td>${eur.format(x.spent)}</td><td>${x.bought ? eur.format(x.avg) : '–'}</td><td>${x.kgBought ? eur.format(x.perKg) : '–'}</td></tr>`;
+    return `<tr><td>${p.label}</td><td>${x.used}</td><td>${x.bought ? eur.format(x.spent) : '–'}</td><td>${x.bought ? eur.format(x.avg) : '–'}</td><td>${x.kgBought ? eur.format(x.perKg) : '–'}</td></tr>`;
   }).join('');
   const total = aggregate(S.events);
 
@@ -869,6 +869,17 @@ $('#file').addEventListener('change', async ev => {
   try {
     const d = JSON.parse(await f.text());
     if (!Array.isArray(d.events)) throw 0;
+    if (d.mode === 'append') {   // historique à ajouter : rien n'est supprimé, et le refaire n'ajoute pas de doublons
+      const known = new Set(S.events.map(e => e.id));
+      const fresh = normalize(d).events.filter(e => !known.has(e.id));
+      if (!fresh.length) { toast('Cet historique est déjà dans l\'app'); return; }
+      if (!confirm(`Ajouter ${fresh.length} lignes à ton historique ? Rien n'est supprimé.`)) return;
+      const now = Date.now();
+      fresh.forEach(e => { e.u = now; });
+      S.events.push(...fresh);
+      save(); render(); toast(`${fresh.length} lignes ajoutées`);
+      return;
+    }
     if (!confirm(`Remplacer les données actuelles par cette sauvegarde (${d.events.length} lignes) ?`)) return;
     replaceAll(normalize(d));
     render(); toast('Sauvegarde restaurée');
